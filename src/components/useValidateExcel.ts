@@ -4,7 +4,7 @@ import {
   removeNumber,
   startsWithAlphabeticCharacter,
 } from "../util/helpeValidate";
-import * as XLSX from "xlsx";
+import * as XLSX from "xlsx-js-style";
 import {
   AllowedTypes,
   ICell,
@@ -15,6 +15,7 @@ import {
   checkFormatDateRow,
   checkPhoneNumberRow,
   checkTypeRow,
+  getDataSheet,
 } from "../util/validateExcel";
 
 enum ERuleValidation {
@@ -59,6 +60,7 @@ interface IErrorExcel {
 export interface IResultVaildExcel {
   error: IErrorExcel;
   success: boolean;
+  cellError: IErrorExcel;
 }
 
 interface IHookValidExcel {
@@ -91,6 +93,7 @@ const catchErrorColumn = (
   validationRules: IValidationRules
 ) => {
   const message: string[] = [];
+  let cellError: string[] = [];
   const { dateFormat, rowEnd, schoolYear, rowStart, typeRow } = validationRules;
   rules.forEach((rule) => {
     // không được trống
@@ -107,6 +110,7 @@ const catchErrorColumn = (
       );
       if (!success) {
         message.push(`Cột ${columnName} ô ${rows.join(", ")} không được trống`);
+        cellError = [...cellError, ...rows];
       }
     }
     // giá trị tăng dần
@@ -117,6 +121,7 @@ const catchErrorColumn = (
         message.push(
           `Cột ${columnName} giá trị ô ${rows.join(", ")} không tăng dần`
         );
+        cellError = [...cellError, ...rows];
       }
     }
     // giá trị không được trùng
@@ -126,6 +131,7 @@ const catchErrorColumn = (
         message.push(
           `Cột ${columnName} ô ${rows.join(", ")} có giá trị trùng nhau`
         );
+        cellError = [...cellError, ...rows];
       }
     }
     // giá trị phải giống mẫu
@@ -140,6 +146,7 @@ const catchErrorColumn = (
 
       if (!success) {
         message.push(`Cột ${columnName} ô ${rows.join(", ")} có giá trị khác`);
+        cellError = [...cellError, ...rows];
       }
     }
     // giá trị là số điện thoại
@@ -151,6 +158,7 @@ const catchErrorColumn = (
             ", "
           )} không phải số điện thoại hợp lệ`
         );
+        cellError = [...cellError, ...rows];
       }
     }
     // date format
@@ -166,6 +174,7 @@ const catchErrorColumn = (
         message.push(
           `Cột ${columnName} ô ${rows.join(", ")} không theo date format`
         );
+        cellError = [...cellError, ...rows];
       }
     }
     // giá trị theo kiểu
@@ -178,13 +187,14 @@ const catchErrorColumn = (
         message.push(
           `Cột ${columnName} ô ${rows.join(", ")} khác kiểu giá trị`
         );
+        cellError = [...cellError, ...rows];
       }
     }
   });
   if (message.length > 0) {
-    return { success: false, message };
+    return { success: false, message, cellError };
   } else {
-    return { success: true, message };
+    return { success: true, message, cellError };
   }
 };
 
@@ -224,32 +234,6 @@ function getDataColumn(workSheet: XLSX.WorkSheet) {
   });
   return result;
 }
-//==========================get data sheet====================
-const getDataSheet = (
-  file: File
-): Promise<{ sheetNames: string[]; sheets: XLSX.WorkSheet }> => {
-  return new Promise((resolve, reject) => {
-    const fileReader = new FileReader();
-    fileReader.onload = (e: ProgressEvent<FileReader>) => {
-      try {
-        const data = e.target?.result;
-        if (!data) {
-          throw new Error("File could not be read");
-        }
-        const workbook = XLSX.read(data, { type: "array" });
-        const sheetNames = workbook.SheetNames;
-        const sheets = workbook.Sheets;
-        resolve({ sheetNames, sheets });
-      } catch (error) {
-        reject(error);
-      }
-    };
-    fileReader.onerror = (error) => {
-      reject(error);
-    };
-    fileReader.readAsArrayBuffer(file);
-  });
-};
 
 //==========================================validate sheet============================================
 const validateSheet = (
@@ -258,9 +242,10 @@ const validateSheet = (
   option: IValidationRules
 ) => {
   const arrayNameColumn = Object.keys(ruleColumn);
-  let result: { message: string[]; success: boolean } = {
+  let result: { message: string[]; success: boolean; cellError: string[] } = {
     message: [],
     success: true,
+    cellError: [],
   };
   for (let col of arrayNameColumn) {
     const rules = ruleColumn[col];
@@ -268,9 +253,18 @@ const validateSheet = (
     if (!column) continue;
     const valueColumn = valueSheet[column];
     const [_, ...value] = valueColumn;
-    const { message: mes, success } = catchErrorColumn(value, rules, option);
+    const {
+      message: mes,
+      success,
+      cellError,
+    } = catchErrorColumn(value, rules, option);
+
     if (!success) {
-      result = { success: false, message: [...result.message, ...mes] };
+      result = {
+        success: false,
+        message: [...result.message, ...mes],
+        cellError,
+      };
     }
   }
   return result;
@@ -281,6 +275,7 @@ function validateExcel(valid: IValidateExcel) {
   let result: IResultVaildExcel = {
     error: {},
     success: true,
+    cellError: {},
   };
   if (!isArraysEqual(sheetNamesValid, sheetNamesExcel)) {
     (result.success = false),
@@ -315,7 +310,11 @@ function validateExcel(valid: IValidateExcel) {
     const rowStart = getNumber(sizeRowSheet[0]);
     const rowEnd = getNumber(sizeRowSheet[1]);
     //----------------------vaidate-------------------
-    const { message, success } = validateSheet(
+    const {
+      message,
+      success,
+      cellError: cellErrorSheet,
+    } = validateSheet(
       columnsSheet,
       {
         ...validate,
@@ -326,21 +325,31 @@ function validateExcel(valid: IValidateExcel) {
         rowEnd,
       }
     );
-
     if (!success || errorOutSize) {
       if (result.error.hasOwnProperty(name)) {
         const owError = { ...result.error };
         owError[name] = errorOutSize
           ? [...owError[name], ...message, errorOutSize]
           : [...owError[name], ...message];
-        result = { success: false, error: { ...result.error } };
       } else {
         result = {
+          ...result,
           success: false,
           error: {
             ...result.error,
             [name]: errorOutSize ? [...message, errorOutSize] : [...message],
           },
+        };
+      }
+    }
+    if (!success) {
+      if (result.cellError.hasOwnProperty(name)) {
+        const owCellError = { ...result.cellError };
+        owCellError[name] = [...owCellError[name], ...cellErrorSheet];
+      } else {
+        result = {
+          ...result,
+          cellError: { ...result.cellError, [name]: [...cellErrorSheet] },
         };
       }
     }
@@ -353,7 +362,12 @@ const useValidateExcel = () => {
     valid: IHookValidExcel
   ): Promise<IResultVaildExcel> => {
     const { file, rules, sheetNamesValid } = valid;
-    if (!file) return { success: false, error: { file: ["File not found"] } };
+    if (!file)
+      return {
+        success: false,
+        error: { file: ["File not found"] },
+        cellError: {},
+      };
     const { sheetNames, sheets } = await getDataSheet(file);
     const res = validateExcel({
       sheetNamesExcel: sheetNames,

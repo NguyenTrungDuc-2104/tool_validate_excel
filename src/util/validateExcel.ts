@@ -1,7 +1,7 @@
 import dayjs from "dayjs";
 import customParseFormat from "dayjs/plugin/customParseFormat";
 import { findMissingNumbers, getNumber, removeNumber } from "./helpeValidate";
-
+import * as XLSX from "xlsx-js-style";
 dayjs.extend(customParseFormat);
 export type AllowedTypes = "number" | "string" | "boolean";
 
@@ -14,6 +14,33 @@ interface IResultValid {
   columnName: string;
   rows: string[];
 }
+//==========================get data sheet====================
+export const getDataSheet = (
+  file: File
+): Promise<{ sheetNames: string[]; sheets: XLSX.WorkSheet }> => {
+  return new Promise((resolve, reject) => {
+    const fileReader = new FileReader();
+    fileReader.onload = (e: ProgressEvent<FileReader>) => {
+      try {
+        const data = e.target?.result;
+        if (!data) {
+          throw new Error("File could not be read");
+        }
+        const workbook = XLSX.read(data, { type: "array" });
+        const sheetNames = workbook.SheetNames;
+        const sheets = workbook.Sheets;
+        resolve({ sheetNames, sheets });
+      } catch (error) {
+        reject(error);
+      }
+    };
+    fileReader.onerror = (error) => {
+      reject(error);
+    };
+    fileReader.readAsArrayBuffer(file);
+  });
+};
+
 //=================================get name column===========================
 const getNameColumn = (column: ICell[]) => {
   const col = Object.keys(column[0])[0].slice(0, 1) || "";
